@@ -18,11 +18,11 @@ Lifetime positions can appear as either "input" or "output":
   input refers to the types of the formal arguments, while output refers to
   result types. So `fn foo(s: &str) -> (&str, &str)` has elided one lifetime in
   input position and two lifetimes in output position. Note that the input
-  positions of a `fn` method definition do not include the lifetimes that occur
-  in the method's `impl` header (nor lifetimes that occur in the trait header,
-  for a default method).
+  positions for a `fn` method definition do not include the lifetimes that occur
+  in a method's `impl` block header (nor the lifetimes that occur in the trait's block header
+  in case of default methods).
 
-* For `impl` headers, all types are input. So `impl Trait<&T> for Struct<&T>`
+* For `impl` headers, all types appear as input. So `impl Trait<&T> for Struct<&T>`
   has elided two lifetimes in input position, while `impl Struct<&T>` has elided
   one.
 
