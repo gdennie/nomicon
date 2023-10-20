@@ -2,20 +2,32 @@
 
 Unsafe code can often end up producing references or lifetimes out of thin air.
 Such lifetimes come into the world as *unbounded*. The most common source of
-this is taking a reference to a dereferenced raw pointer, which produces a
-reference with an unbounded lifetime. Such a lifetime becomes as big as context
-demands. This is in fact more powerful than simply becoming `'static`, because
-for instance `&'static &'a T` will fail to typecheck, but the unbound lifetime
-will perfectly mold into `&'a &'a T` as needed. However for most intents and
+this is taking a reference to the target of a raw pointer. This necessarily produces a
+reference with an unbounded lifetime since the compiler cannot discern the lifespan of the target.
+Such a lifetime becomes as big as context demands. 
+This is in fact more powerful than simply becoming `'static`, because
+for instance `&'static &'a T` will fail to typecheck because we are trying
+to obtain a `&'static` lifetime reference to a less persistent target. 
+However, an unbound lifetime
+will perfectly mold into `&'a &'a T` as needed. Nonetheless, For most intents and
 purposes, such an unbounded lifetime can be regarded as `'static`.
 
-Almost no reference is `'static`, so this is probably wrong. `transmute` and
-`transmute_copy` are the two other primary offenders. One should endeavor to
+Still, almost no runtime constructed references are `'static`, so this is probably wrong.
+
+`transmute` and `transmute_copy` are the two other primary sources of unbound lifetimes. 
+One should endeavor to
 bound an unbounded lifetime as quickly as possible, especially across function
 boundaries.
 
+The easiest way to avoid unbounded lifetimes is to use lifetime elision at the
+function boundary. If an output lifetime is elided, then it *will have been* bounded by
+an input lifetime somehow. Of course it might be bounded by the *wrong* input lifetime, but
+this will usually just cause a compiler error, rather than allow memory safety
+to be trivially violated.
+
 Given a function, any output lifetimes that don't derive from inputs are
-unbounded. For instance:
+unbounded; and so, here the function stipulates a lifetime with which the
+result is bound. For instance:
 
 <!-- no_run: This example exhibits undefined behavior. -->
 ```rust,no_run
@@ -30,12 +42,6 @@ fn main() {
     println!("Invalid str: {}", dangling); // Invalid str: gӚ_`
 }
 ```
-
-The easiest way to avoid unbounded lifetimes is to use lifetime elision at the
-function boundary. If an output lifetime is elided, then it *must* be bounded by
-an input lifetime. Of course it might be bounded by the *wrong* lifetime, but
-this will usually just cause a compiler error, rather than allow memory safety
-to be trivially violated.
 
 Within a function, bounding lifetimes is more error-prone. The safest and easiest
 way to bound a lifetime is to return it from a function with a bound lifetime.
