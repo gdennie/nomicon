@@ -97,7 +97,7 @@ where
 ```
 
 Because of the lifetime restrictions imposed, `&mut map`'s lifetime
-overlaps other mutable borrows, resulting in a compile error:
+necessarily overlaps other mutable borrows, resulting in a compile error:
 
 ```text
 error[E0499]: cannot borrow `*map` as mutable more than once at a time
@@ -118,6 +118,25 @@ error[E0499]: cannot borrow `*map` as mutable more than once at a time
 14 | |         }
 15 | |     }
    | |_____- returning this value requires that `*map` is borrowed for `'m`
+```
+
+As a result, the following workaround does work. However, there are other 
+more efficient methods on `HashMap` for key test and insert default...
+
+```
+use std::collections::HashMap;
+use std::hash::Hash;
+
+fn get_default<'m, K, V>(map: &'m mut HashMap<K, V>, key: K) -> &'m mut V
+where
+    K: Clone + Eq + Hash,
+    V: Default,
+{
+    if let None = map.get_mut(&key) {
+        map.insert(key.clone(), V::default());
+    }
+    map.get_mut(&key).unwrap()
+}
 ```
 
 [ex2]: lifetimes.html#example-aliasing-a-mutable-reference
