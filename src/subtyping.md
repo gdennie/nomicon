@@ -1,13 +1,15 @@
 # Subtyping and Variance
 
-Rust uses lifetimes to track the relationships between borrows and ownership.
+Rust uses lifetimes to track the relationships between references and targets.
 However, a naive implementation of lifetimes would be either too restrictive,
 or permit undefined behavior.
 
 In order to allow flexible usage of lifetimes
-while also preventing their misuse, Rust uses **subtyping** and **variance**.
+while also preventing their misuse, Rust uses **subtyping** and **variance**
+to merge different lifetimes into a single lifetime when required.
 
-Let's start with an example.
+Let's start with an example of a function requiring one lifetime over 
+two arguments but invoked with two distinct lifetimes.
 
 ```rust
 // Note: debug expects two parameters with the *same* lifetime
@@ -44,20 +46,21 @@ Let's try using subtyping with our lifetimes.
 
 ## Subtyping
 
-Subtyping is the idea that one type can be used in place of another.
+Subtyping is the idea that one type, the sub type, can be used in place of another.
 
-Let's define that `Sub` is a subtype of `Super` (we'll be using the notation `Sub <: Super` throughout this chapter).
+Let's define that the type `Sub` is a subtype of `Super` (we'll be using the notation `Sub : Super` throughout this chapter).
 
-What this is suggesting to us is that the set of *requirements* that `Super` defines
-are completely satisfied by `Sub`. `Sub` may then have more requirements.
+What this suggests is that the set of *requirements* that `Super` supports
+are completely satisfied by `Sub`. `Sub` may then support more requirements.
 
-Now, in order to use subtyping with lifetimes, we need to define the requirement of a lifetime:
+Now, in order to use subtyping with lifetimes, we need to define the requirement of a lifetime. 
+It is one simple thing...
 
-> `'a` defines a region of code.
+> `'a` delimits a path of execution often simplified as a region of code.
 
 Now that we have a defined set of requirements for lifetimes, we can define how they relate to each other:
 
-> `'long <: 'short` if and only if `'long` defines a region of code that **completely contains** `'short`.
+> `'long : 'short` if and only if `'long` defines a region of code that **completely contains** `'short`.
 
 `'long` may define a region larger than `'short`, but that still fits our definition.
 
@@ -67,13 +70,13 @@ but this simple rule is a very good 99% intuition.
 And unless you write unsafe code, the compiler will automatically handle all the corner cases for you.
 
 > But this is the Rustonomicon. We're writing unsafe code,
-so we need to understand how this stuff really works, and how we can mess it up.
+so we need to understand how this stuff really works, and how things can get messed up.
 
-Going back to our example above, we can say that `'static <: 'world`.
+Going back to our example above, we can say that `'static : 'world`.
 For now, let's also accept the idea that subtypes of lifetimes can be passed through references
 (more on this in [Variance](#variance)),
 _e.g._ `&'static str` is a subtype of `&'world str`, then we can "downgrade" `&'static str` into a `&'world str`.
-With that, the example above will compile:
+With that explanation we see the example above does compile:
 
 ```rust
 fn debug<'a>(a: &'a str, b: &'a str) {
@@ -92,8 +95,13 @@ fn main() {
 
 ## Variance
 
-Above, we glossed over the fact that `'static <: 'b` implied that `&'static T <: &'b T`. This uses a property known as _variance_.
-It's not always as simple as this example, though. To understand that, let's try to extend this example a bit:
+We glossed over the fact that `'static < 'b` implied that `&'static T < &'b T`. The implicit extension of the concept
+is a property known as _variance_.
+It's not always as simple as this example though. To understand that, let's try to extend this example a bit:
+
+We call `assign` to set the `hello` reference to _point_ to `world`.
+Then `world` goes out of scope at the end of the inner block in which
+it is defined and before the `hello` in the println!
 
 ```rust,compile_fail,E0597
 fn assign<T>(input: &mut T, val: T) {
@@ -110,9 +118,6 @@ fn main() {
 }
 ```
 
-In `assign`, we are setting the `hello` reference to point to `world`.
-But then `world` goes out of scope, before the later use of `hello` in the println!
-
 This is a classic use-after-free bug!
 
 Our first instinct might be to blame the `assign` impl, but there's really nothing wrong here.
@@ -122,25 +127,36 @@ The problem is that we cannot assume that `&mut &'static str` and `&mut &'b str`
 This means that `&mut &'static str` **cannot** be a *subtype* of `&mut &'b str`,
 even if `'static` is a subtype of `'b`.
 
-Variance is the concept that Rust borrows to define relationships about subtypes through their generic parameters.
+Variance is the concept that Rust borrows to define relationships about subtypes 
+through their generic parameters.
 
 > NOTE: For convenience we will define a generic type `F<T>` so
-> that we can easily talk about `T`. Hopefully this is clear in context.
+> that we can easily talk about the relationship between
+> the various instance types of `T`.
+> Hopefully this is clear in context.
 
-The type `F`'s *variance* is how the subtyping of its inputs affects the
-subtyping of its outputs. There are three kinds of variance in Rust. Given two
-types `Sub` and `Super`, where `Sub` is a subtype of `Super`:
+`F`'s *variance* describes how subtypes relationship between its inputs (generic arguments) affects
+subtyping between instances of its output (constructed type). 
+There are three kinds of variance in Rust. Given `Super` and `Sub`, a subtype of `Super`, the following holds:
 
-* `F` is **covariant** if `F<Sub>` is a subtype of `F<Super>` (the subtype property is passed through)
-* `F` is **contravariant** if `F<Super>` is a subtype of `F<Sub>` (the subtype property is "inverted")
+* `F` is **covariant** when `F<Sub>` is a subtype of `F<Super>` (the subtype property is passed through)
+* `F` is **contravariant** when `F<Super>` is a subtype of `F<Sub>` (the subtype property is "inverted")
 * `F` is **invariant** otherwise (no subtyping relationship exists)
 
 If we remember from the above examples,
-it was ok for us to treat `&'a T` as a subtype of `&'b T` if `'a <: 'b`,
-therefore we can say that `&'a T` is *covariant* over `'a`.
+it was ok for us to treat `&'a T` as a subtype of `&'b T` if `'a : 'b`;
+`&'a T` will be around as long as `&'b T` and so we can 
+assign `&'a T` to `&'b T` as the immutable reference is tolerant of 
+the shorter lifetime constraint.
+Therefore we can say that `&'a T` is *covariant* over `'a`.
 
-Also, we saw that it was not ok for us to treat `&mut &'a U` as a subtype of `&mut &'b U`,
-therefore we can say that `&mut T` is *invariant* over `T`
+However, we saw that it was _not ok_ to similarly presume
+`&mut &'a T` is a subtype of `&mut &'b T` simply because `'a : 'b`
+and have `&mut &'a T` assignable to `&mut &'b T`. Similarly,
+`&mut &'b T` is not assignable to `&mut &'a T` because it
+is not gauranteed to live long enough. Consequently, the 
+lifetimes have to be the same.
+Therefore, `&mut T` is *invariant* over `T`
 
 Here is a table of some other generic types and their variances:
 
@@ -161,18 +177,24 @@ Some of these can be explained simply in relation to the others:
 * `Vec<T>` and all other owning pointers and collections follow the same logic as `Box<T>`
 * `Cell<T>` and all other interior mutability types follow the same logic as `UnsafeCell<T>`
 * `UnsafeCell<T>` having interior mutability gives it the same variance properties as `&mut T`
+* `fn(T) -> U` (see below)
 * `*const T` follows the logic of `&T`
 * `*mut T` follows the logic of `&mut T` (or `UnsafeCell<T>`)
+
+> NOTE: the *only* source of contravariance in the language is in the arguments to
+> a function where, if `B: A` then `F(A) : F(B)`.
+> For instance, if `B` is an `i32` and `A` is an `i64` then any value of `B` is assignable to `A`.
+> However, an `F(i32)` cannot stand in for `F(i64)` as it would not be able to
+> handle receiving expected `i64` values outside the range of `i32`.
+> On the other hand, an `F(i64)` can indeed stand in for an `F(i32)` since it is fully capable of
+> handling the entire `i32` expected input input.
+> Similarly for lifetimes, if `'b: 'a` then `F(&'a T): F(&'b T)` 
+> because a function that requires access for a shorter time can
+> stand in for a function that requires access for a longer time.
 
 For more types, see the ["Variance" section][variance-table] on the reference.
 
 [variance-table]: ../reference/subtyping.html#variance
-
-> NOTE: the *only* source of contravariance in the language is the arguments to
-> a function, which is why it really doesn't come up much in practice. Invoking
-> contravariance involves higher-order programming with function pointers that
-> take references with specific lifetimes (as opposed to the usual "any lifetime",
-> which gets into higher rank lifetimes, which work independently of subtyping).
 
 Now that we have some more formal understanding of variance,
 let's go through some more examples in more detail.
@@ -217,16 +239,18 @@ fn assign<T>(input: &mut T, val: T) {
 }
 ```
 
-All it does is take a mutable reference and a value and overwrite the referent with it.
+All it does is take a mutable reference and a value and overwrite the target with it.
 What's important about this function is that it creates a type equality constraint. It
-clearly says in its signature the referent and the value must be the *exact same* type.
+clearly says in its signature the target and the value must be the *exact same* type.
 
-Meanwhile, in the caller we pass in `&mut &'static str` and `&'world str`.
+Meanwhile, in the caller we pass in `&mut &'static str` and `&'world str`
+where `T` is `&'static str` and `&'world str`, respectively.
+However, because `&mut T` is invariant over `T`, the compiler concludes it can't apply 
+any the available covariance subtyping relationship of `'static : 'world`
+to the first argument, and so `T` must remain interpreted as exactly `&'static str`.
+The result is a compiler error.
 
-Because `&mut T` is invariant over `T`, the compiler concludes it can't apply any subtyping
-to the first argument, and so `T` must be exactly `&'static str`.
-
-This is counter to the `&T` case:
+The above is counter to the `&T` case:
 
 ```rust
 fn debug<T: std::fmt::Debug>(a: T, b: T) {
@@ -240,7 +264,16 @@ So the compiler decides that `&'static str` can become `&'b str` if and only if
 `&'static str` is a subtype of `&'b str`, which will hold if `'static <: 'b`.
 This is true, so the compiler is happy to continue compiling this code.
 
-As it turns out, the argument for why it's ok for Box (and Vec, HashMap, etc.) to be covariant is pretty similar to the argument for why it's ok for lifetimes to be covariant: as soon as you try to stuff them in something like a mutable reference, they inherit invariance and you're prevented from doing anything bad.
+> invariance exists when covariance and contravariance is occuring in the same type expression.
+> In the case of `&'a mut T`, `'a` is covariant, which is to say because it is bigger (lives longer)
+> it can be assigned to its supertype. On the other hand, `mut T`, is contravariant and states
+> `T` is bigger (`i64` to `i32`), it _cannot_ be assigned to its supertype; however, its supertype
+> can be assigned to it. As a result, this combination of variance in `&'a mut T` forces invariance.
+
+Consequently, the argument for why it's ok for Box (and Vec, HashMap, etc.) to be covariant is pretty 
+similar to the argument for why it's ok for lifetimes to be covariant: as soon as you try to stuff 
+them in something like a mutable reference, they inherit invariance and you're 
+prevented from doing anything bad.
 
 However Box makes it easier to focus on the by-value aspect of references that we partially glossed over.
 
@@ -255,9 +288,11 @@ let mut world: Box<&'b str>;
 world = hello;
 ```
 
-There is no problem at all with the fact that we have forgotten that `hello` was alive for `'static`,
-because as soon as we moved `hello` to a variable that only knew it was alive for `'b`,
-**we destroyed the only thing in the universe that remembered it lived for longer**!
+There is no problem at all that we will forget that `hello` is `'static`
+when it is assigned to `world: Box<&'b str>` at `world = hello`
+because as soon as `hello` is moved
+**we will have destroyed `hello`, the only other thing in the universe that was connected and 
+could affect or dependent on the value in any way**! 
 
 Only one thing left to explain: function pointers.
 
@@ -276,8 +311,9 @@ provide a function with the following signature instead:
 fn get_static() -> &'static str;
 ```
 
-So when the function is called, all it's expecting is a `&str` which lives at least the lifetime of `'a`,
-it doesn't matter if the value actually lives longer.
+So when the function is called, all the caller is expecting is a `&str` 
+which lives at least the lifetime of `'a`.
+It doesn't matter if it can actually live longer.
 
 However, the same logic does not apply to *arguments*. Consider trying to satisfy:
 
@@ -294,10 +330,10 @@ fn store_static(&'static str);
 ```
 
 The first function can accept any string reference as long as it lives at least for `'a`,
-but the second cannot accept a string reference that lives for any duration less than `'static`,
-which would cause a conflict.
-Covariance doesn't work here. But if we flip it around, it actually *does*
-work! If we need a function that can handle `&'static str`, a function that can handle *any* reference lifetime
+but the second cannot accept a string reference that lives for any duration less than `'static`.
+This is a conflict.
+Covariance doesn't work here. But if we flip it around, contravariance actually *does*
+work! If we need a function that can expects `&'static str`, a function that can handle *any* reference lifetime
 will surely work fine.
 
 Let's see this in practice
