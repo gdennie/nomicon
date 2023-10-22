@@ -12,19 +12,21 @@ struct Iter<'a, T: 'a> {
 }
 ```
 
-However because `'a` is unused within the struct's body, it's *unbounded*.
+However because `'a` is unused within the struct's body since `*const` 
+doesn't use it, it's *unbounded*.
 [Because of the troubles this has historically caused][unused-param],
 unbounded lifetimes and types are *forbidden* in struct definitions.
-Therefore we must somehow refer to these types in the body.
-Correctly doing this is necessary to have correct variance and drop checking.
+Therefore we must somehow refer to these types within the body.
+Correctly doing so is then necessary in order to have correct variance and drop checking.
 
 [unused-param]: https://rust-lang.github.io/rfcs/0738-variance.html#the-corner-case-unused-parameters-and-parameters-that-are-only-used-unsafely
 
 We do this using `PhantomData`, which is a special marker type. `PhantomData`
 consumes no space, but simulates a field of the given type for the purpose of
-static analysis. This was deemed to be less error-prone than explicitly telling
-the type-system the kind of variance that you want, while also providing other
-useful things such as auto traits and the information needed by drop check.
+static analysis. `PhantomData` was deemed to be less error-prone than explicitly telling
+the type-system the kind of variance that you want, for instance, 
+while also providing other
+useful things such as auto traits (Sync, Send, etc.) and the information needed by drop check.
 
 Iter logically contains a bunch of `&'a T`s, so this is exactly what we tell
 the `PhantomData` to simulate:
@@ -39,7 +41,8 @@ struct Iter<'a, T: 'a> {
 }
 ```
 
-and that's it. The lifetime will be bounded, and your iterator will be covariant
+and that's it. `Iter` now has a lifetime bounded to `T` per the 
+generic type of `PhantomData` such that the iterator will be covariant
 over `'a` and `T`. Everything Just Works.
 
 ## Generic parameters and drop-checking
@@ -66,7 +69,7 @@ This very documentation used to say:
 >
 > The drop checker will generously determine that `Vec<T>` does not own any values
 > of type T. This will in turn make it conclude that it doesn't need to worry
-> about Vec dropping any T's in its destructor for determining drop check
+> about Vec dropping any T's in its destructor when determining drop check
 > soundness. This will in turn allow people to create unsoundness using
 > Vec's destructor.
 >
