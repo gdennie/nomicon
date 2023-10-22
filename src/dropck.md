@@ -4,8 +4,9 @@ We have seen how lifetimes provide us some fairly simple rules for ensuring
 that we never read dangling references. However up to this point we have only ever
 interacted with the _outlives_ relationship in an inclusive manner. That is,
 when we talked about `'a: 'b`, it was ok for `'a` to live _exactly_ as long as
-`'b`. At first glance, this seems to be a meaningless distinction. Nothing ever
-gets dropped at the same time as another, right? This is why we used the
+`'b`. At first glance, this seems to be a meaningless distinction. However, 
+generally nothing ever
+gets dropped at the same time as another. This is why we use the
 following desugaring of `let` statements:
 
 <!-- ignore: simplified code -->
@@ -26,8 +27,8 @@ desugaring to:
 }
 ```
 
-There are some more complex situations which are not possible to desugar using
-scopes, but the order is still defined ‒ variables are dropped in the reverse
+There are complex situations which are not possible to desugar using
+scopes, but the order is still well defined ‒ variables are dropped in the reverse
 order of their definition, fields of structs and tuples in order of their
 definition. There are some more details about order of drop in [RFC 1857][rfc1857].
 
@@ -38,15 +39,16 @@ Let's do this:
 let tuple = (vec![], vec![]);
 ```
 
-The left vector is dropped first. But does it mean the right one strictly
+The left vector is dropped first since it is encountered first in the definition. 
+But does it mean the right one strictly 
 outlives it in the eyes of the borrow checker? The answer to this question is
-_no_. The borrow checker could track fields of tuples separately, but it would
+_no_. Indeed, the borrow checker could track fields of tuples separately, but it would
 still be unable to decide what outlives what in case of vector elements, which
 are dropped manually via pure-library code the borrow checker doesn't
 understand.
 
 So why do we care? We care because if the type system isn't careful, it could
-accidentally make dangling pointers. Consider the following simple program:
+accidentally create dangling pointers. Consider the following simple program:
 
 ```rust
 struct Inspector<'a>(&'a u8);
@@ -65,8 +67,8 @@ fn main() {
 }
 ```
 
-This program is totally sound and compiles today. The fact that `days` does not
-strictly outlive `inspector` doesn't matter. As long as the `inspector` is
+This program is totally sound and compiles today. The fact that `world.days` does not
+strictly outlive `world.inspector` doesn't matter. As long as the `inspector` is
 alive, so is `days`.
 
 However if we add a destructor, the program will no longer compile!
@@ -77,6 +79,7 @@ struct Inspector<'a>(&'a u8);
 impl<'a> Drop for Inspector<'a> {
     fn drop(&mut self) {
         println!("I was only {} days from retirement!", self.0);
+            // drop accesses field of Inspector
     }
 }
 
@@ -92,7 +95,11 @@ fn main() {
     };
     world.inspector = Some(Inspector(&world.days));
     // Let's say `days` happens to get dropped first.
-    // Then when Inspector is dropped, it will try to read free'd memory!
+    // Now, `Some(Inspector(..))` in `world.inspect` is point to free'd memory!
+    // Then when Inspector is dropped it may attempt to free a dangling reference
+    // and although it is an immutable value, the drop semantics of Inspector
+    // is unknown and a pessimistic presumption must take hold such as perhaps
+    // the reference is to a Cell<T> or Rc<T> or trait object.
 }
 ```
 
@@ -113,13 +120,16 @@ error[E0597]: `world.days` does not live long enough
 You can try changing the order of fields or use a tuple instead of the struct,
 it'll still not compile.
 
-Implementing `Drop` lets the `Inspector` execute some arbitrary code during its
+Implementing `Drop` allows the `Inspector` execute some arbitrary code during its
 death. This means it can potentially observe that types that are supposed to
-live as long as it does actually were destroyed first.
+live as long as it does actually were destroyed first!
 
 Interestingly, only generic types need to worry about this. If they aren't
 generic, then the only lifetimes they can harbor are `'static`, which will truly
-live _forever_. This is why this problem is referred to as _sound generic drop_.
+live _forever_. Here, generic includes lifetime and so all fully defined reference
+types remain generic over their lifetime parameters.
+
+This problem is referred to as _sound generic drop_.
 Sound generic drop is enforced by the _drop checker_. As of this writing, some
 of the finer details of how the drop checker (also called dropck) validates
 types is totally up in the air. However The Big Rule is the subtlety that we
@@ -131,13 +141,14 @@ strictly outlive it.**
 Obeying this rule is (usually) necessary to satisfy the borrow
 checker; obeying it is sufficient but not necessary to be
 sound. That is, if your type obeys this rule then it's definitely
-sound to drop.
+sound to drop. However, if it does it may still be sound.
 
 The reason that it is not always necessary to satisfy the above rule
-is that some Drop implementations will not access borrowed data even
-though their type gives them the capability for such access, or because we know
-the specific drop order and the borrowed data is still fine even if the borrow
-checker doesn't know that.
+is that some Drop implementations will never access borrowed data even
+though their type definition gives them the capability to do so or 
+because we know
+the specific drop order and so the borrowed data is still fine even if the borrow
+checker lifetime semantics cannot confirm that.
 
 For example, this variant of the above `Inspector` example will never
 access borrowed data:
@@ -148,6 +159,7 @@ struct Inspector<'a>(&'a u8, &'static str);
 impl<'a> Drop for Inspector<'a> {
     fn drop(&mut self) {
         println!("Inspector(_, {}) knows when *not* to inspect.", self.1);
+            // drop only accesses second field of Inspector
     }
 }
 
@@ -206,15 +218,14 @@ far as the borrow checker knows while it is analyzing `main`, the body
 of an inspector's destructor might access that borrowed data.
 
 Therefore, the drop checker forces all borrowed data in a value to
-strictly outlive that value.
+strictly outlive that value and treat custom
+`drop` implementations pessimistically.
 
 ## An Escape Hatch
 
-The precise rules that govern drop checking may be less restrictive in
-the future.
-
-The current analysis is deliberately conservative and trivial; it forces all
-borrowed data in a value to outlive that value, which is certainly sound.
+The precise rules that govern drop checking may be made less restrictive in
+the future. The current analysis is deliberately conservative and trivial
+but certainly sound.
 
 Future versions of the language may make the analysis more precise, to
 reduce the number of cases where sound code is rejected as unsafe.
@@ -223,8 +234,8 @@ know not to inspect during destruction.
 
 In the meantime, there is an unstable attribute that one can use to
 assert (unsafely) that a generic type's destructor is _guaranteed_ to
-not access any expired data, even if its type gives it the capability
-to do so.
+not access any expired data, even if its type definition gives it that 
+capability.
 
 That attribute is called `may_dangle` and was introduced in [RFC 1327][rfc1327].
 To deploy it on the `Inspector` from above, we would write:
@@ -255,13 +266,13 @@ fn main() {
 ```
 
 Use of this attribute requires the `Drop` impl to be marked `unsafe` because the
-compiler is not checking the implicit assertion that no potentially expired data
-(e.g. `self.0` above) is accessed.
+compiler will not be checking the implicit assertion that no potentially expired data
+(e.g. `self.0` above) is being accessed.
 
 The attribute can be applied to any number of lifetime and type parameters. In
-the following example, we assert that we access no data behind a reference of
+the following example, we assert that we access no data behind references with
 lifetime `'b` and that the only uses of `T` will be moves or drops, but omit
-the attribute from `'a` and `U`, because we do access data with that lifetime
+the attribute from `'a` and `U`, because we will access data with that lifetime
 and that type:
 
 ```rust
