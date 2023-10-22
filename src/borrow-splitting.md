@@ -57,7 +57,7 @@ In order to "teach" borrowck that what we're doing is ok, we need to drop down
 to unsafe code. For instance, mutable slices expose a `split_at_mut` function
 that consumes the slice and returns two mutable slices. One for everything to
 the left of the index, and one for everything to the right. Intuitively we know
-this is safe because the slices don't overlap, and therefore alias. However
+this is safe because the slices don't overlap, and therefore aren't aliases. However
 the implementation requires some unsafety:
 
 ```rust
@@ -105,7 +105,7 @@ But mutable references make this a mess. At first glance, they might seem
 completely incompatible with this API, as it would produce multiple mutable
 references to the same object!
 
-However it actually *does* work, exactly because iterators are one-shot objects.
+However, it actually *does* work precisely because iterators are one-shot objects.
 Everything an IterMut yields will be yielded at most once, so we don't
 actually ever yield multiple mutable references to the same piece of data.
 
@@ -147,7 +147,9 @@ impl<'a, T> Iterator for IterMut<'a, T> {
 }
 ```
 
-Here's a mutable slice:
+Here's a mutable slice
+(not that DoubleEndedIterator merely provides for
+consuming from the _end_ of the buffer as well as the front):
 
 ```rust
 # fn main() {}
@@ -187,31 +189,9 @@ And here's a binary tree:
 # fn main() {}
 use std::collections::VecDeque;
 
-type Link<T> = Option<Box<Node<T>>>;
-
-struct Node<T> {
-    elem: T,
-    left: Link<T>,
-    right: Link<T>,
-}
-
 pub struct Tree<T> {
     root: Link<T>,
 }
-
-struct NodeIterMut<'a, T: 'a> {
-    elem: Option<&'a mut T>,
-    left: Option<&'a mut Node<T>>,
-    right: Option<&'a mut Node<T>>,
-}
-
-enum State<'a, T: 'a> {
-    Elem(&'a mut T),
-    Node(&'a mut Node<T>),
-}
-
-pub struct IterMut<'a, T: 'a>(VecDeque<NodeIterMut<'a, T>>);
-
 impl<T> Tree<T> {
     pub fn iter_mut(&mut self) -> IterMut<T> {
         let mut deque = VecDeque::new();
@@ -220,6 +200,13 @@ impl<T> Tree<T> {
     }
 }
 
+type Link<T> = Option<Box<Node<T>>>;
+
+struct Node<T> {
+    elem: T,
+    left: Link<T>,
+    right: Link<T>,
+}
 impl<T> Node<T> {
     pub fn iter_mut(&mut self) -> NodeIterMut<T> {
         NodeIterMut {
@@ -230,7 +217,11 @@ impl<T> Node<T> {
     }
 }
 
-
+struct NodeIterMut<'a, T: 'a> {
+    elem: Option<&'a mut T>,
+    left: Option<&'a mut Node<T>>,
+    right: Option<&'a mut Node<T>>,
+}
 impl<'a, T> Iterator for NodeIterMut<'a, T> {
     type Item = State<'a, T>;
 
@@ -247,7 +238,6 @@ impl<'a, T> Iterator for NodeIterMut<'a, T> {
         }
     }
 }
-
 impl<'a, T> DoubleEndedIterator for NodeIterMut<'a, T> {
     fn next_back(&mut self) -> Option<Self::Item> {
         match self.right.take() {
@@ -263,6 +253,7 @@ impl<'a, T> DoubleEndedIterator for NodeIterMut<'a, T> {
     }
 }
 
+pub struct IterMut<'a, T: 'a>(VecDeque<NodeIterMut<'a, T>>);
 impl<'a, T> Iterator for IterMut<'a, T> {
     type Item = &'a mut T;
     fn next(&mut self) -> Option<Self::Item> {
@@ -275,7 +266,6 @@ impl<'a, T> Iterator for IterMut<'a, T> {
         }
     }
 }
-
 impl<'a, T> DoubleEndedIterator for IterMut<'a, T> {
     fn next_back(&mut self) -> Option<Self::Item> {
         loop {
@@ -286,6 +276,11 @@ impl<'a, T> DoubleEndedIterator for IterMut<'a, T> {
             }
         }
     }
+}
+
+enum State<'a, T: 'a> {
+    Elem(&'a mut T),
+    Node(&'a mut Node<T>),
 }
 ```
 
